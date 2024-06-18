@@ -16,6 +16,7 @@ But with that we still have:
 - Morgan (logging)
 - JSON Web Token (authentication)
 - Swagger (documentation)
+- Yup (validation)
 
 The idea is to use the [Clean Architecture](https://paulallies.medium.com/clean-architecture-typescript-express-api-b90846794998) to organize the folders, but this was slightly modified and remained the way it is currently.
 
