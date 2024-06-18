@@ -3,30 +3,49 @@ import { AppDataSource } from "./../../core/DataSource/data-source";
 import { User } from "../../core/DataSource/entities/User";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import { UserSchema } from "../schemas/UserSchema";
+import { LoginSchema } from "../schemas/LoginSchema";
 
 const JWT_SECRET = process.env.JWT_SECRET || "secret";
+
+interface AuthenticatedRequest extends Request {
+    userId?: number;
+}
 
 export class UserController {
     // Add a user (Registration)
     async register(request: Request, response: Response) {
         const userRepository = AppDataSource.getRepository(User);
-        const { firstname, lastname, email, username, password, role } = request.body;
-
-        if (!firstname || !lastname || !email || !username || !password) {
-            return response.status(400).json({ message: "Username and password are required" });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const user = userRepository.create(
-            {
-                firstname, lastname, email, username, password: hashedPassword, role: role || "user"
-            });
+        const { firstname, lastname, email, username, password, role } =
+            request.body;
 
         try {
+            await UserSchema.validate(request.body, { abortEarly: false });
+            const hashedPassword = await bcrypt.hash(password, 10);
+            const user = userRepository.create({
+                firstname,
+                lastname,
+                email,
+                username,
+                password: hashedPassword,
+                role: role || "user",
+            });
             await userRepository.save(user);
-            return response.status(201).json(user);
-        } catch (error) {
-            return response.status(500).json({ message: "Error creating user", error });
+            // Remove password from user object
+            const { password: userPassword, ...userWithoutPassword } = user;
+            return response.status(201).json({
+                message: "User created successfully",
+                user: userWithoutPassword,
+            });
+        } catch (error: any) {
+            if (error.name === "ValidationError") {
+                return response.status(400).json({
+                    errors: error,
+                });
+            }
+            return response
+                .status(500)
+                .json({ message: "Internal server error" });
         }
     }
 
@@ -35,27 +54,48 @@ export class UserController {
         const userRepository = AppDataSource.getRepository(User);
         const { username, password } = request.body;
 
-        if (!username || !password) {
-            return response.status(400).json({ message: "Username and password are required" });
+        try {
+            await LoginSchema.validate(request.body, { abortEarly: false });
+
+            const user = await userRepository.findOne({ where: { username } });
+
+            if (!user) {
+                return response.status(404).json({ message: "User not found" });
+            }
+
+            const isPasswordValid = await bcrypt.compare(
+                password,
+                user.password,
+            );
+
+            if (!isPasswordValid) {
+                return response.status(400).json({
+                    error: 400,
+                    message: "Username or password invalid",
+                });
+            }
+
+            const token = jwt.sign(
+                { userId: user.id, role: user.role },
+                JWT_SECRET,
+                { expiresIn: "1h" },
+            );
+
+            // Remove password from user object
+            const { password: userPassword, ...userWithoutPassword } = user;
+            return response
+                .status(200)
+                .json({ token, user: userWithoutPassword });
+        } catch (error: any) {
+            if (error.name === "ValidationError") {
+                return response.status(400).json({
+                    errors: error,
+                });
+            }
+            return response
+                .status(500)
+                .json({ message: "Internal server error" });
         }
-
-        const user = await userRepository.findOne({ where: { username } });
-
-        if (!user) {
-            return response.status(404).json({ message: "User not found" });
-        }
-
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-
-        if (!isPasswordValid) {
-            return response.status(401).json({ message: "Invalid password" });
-        }
-
-        const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: "1h" });
-
-        // Remove password from user object
-        const { password: userPassword, ...userWithoutPassword } = user;
-        return response.json({ user: userWithoutPassword, token });
     }
 
     // Get all users (only for admin)
@@ -70,15 +110,12 @@ export class UserController {
     }
 
     // Get user by id (restricted to self)
-    async getUserById(request: Request, response: Response) {
-        const userId = parseInt(request.params.id, 10);
+    async getUserById(request: AuthenticatedRequest, response: Response) {
+        const userId = request.userId;
 
-        // Verifica se o usuário autenticado está acessando seu próprio perfil
-        if (request.userId !== userId && request.role !== "admin") {
-            return response.status(403).json({ message: "Access denied" });
-        }
-
-        const user = await AppDataSource.getRepository(User).findOne({ where: { id: userId } });
+        const user = await AppDataSource.getRepository(User).findOne({
+            where: { id: userId },
+        });
 
         if (!user) {
             return response.status(404).json({ message: "User not found" });
@@ -88,13 +125,8 @@ export class UserController {
     }
 
     // Update user (restricted to self or admin)
-    async updateUser(request: Request, response: Response) {
-        const userId = parseInt(request.params.id, 10);
-
-        // Verifica se o usuário autenticado está atualizando seu próprio perfil
-        if (request.userId !== userId && request.role !== "admin") {
-            return response.status(403).json({ message: "Access denied" });
-        }
+    async updateUser(request: AuthenticatedRequest, response: Response) {
+        const userId = request.userId;
 
         const userRepository = AppDataSource.getRepository(User);
         const user = await userRepository.findOne({ where: { id: userId } });
@@ -103,23 +135,35 @@ export class UserController {
             return response.status(404).json({ message: "User not found" });
         }
 
-        if (request.body.password) {
-            request.body.password = await bcrypt.hash(request.body.password, 10);
-        }
+        try {
+            await UserSchema.validate(request.body, { abortEarly: false });
+            if (request.body.password) {
+                request.body.password = await bcrypt.hash(
+                    request.body.password,
+                    10,
+                );
+            }
 
-        userRepository.merge(user, request.body);
-        await userRepository.save(user);
-        return response.status(200).json(user);
+            userRepository.merge(user, request.body);
+            await userRepository.save(user);
+            // Remove password from user object
+            const { password: userPassword, ...userWithoutPassword } = user;
+            return response.status(200).json(userWithoutPassword);
+        } catch (error: any) {
+            if (error.name === "ValidationError") {
+                return response.status(400).json({
+                    errors: error,
+                });
+            }
+            return response
+                .status(500)
+                .json({ message: "Internal server error" });
+        }
     }
 
     // Delete user (restricted to self or admin)
-    async deleteUser(request: Request, response: Response) {
-        const userId = parseInt(request.params.id, 10);
-
-        // Verifica se o usuário autenticado está deletando seu próprio perfil
-        if (request.userId !== userId && request.role !== "admin") {
-            return response.status(403).json({ message: "Access denied" });
-        }
+    async deleteUser(request: AuthenticatedRequest, response: Response) {
+        const userId = request.userId;
 
         const userRepository = AppDataSource.getRepository(User);
         const user = await userRepository.findOne({ where: { id: userId } });

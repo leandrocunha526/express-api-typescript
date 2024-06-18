@@ -34,8 +34,8 @@ router.get('/expense/search', authMiddleware, expenseController.searchExpenses.b
 router.post('/user/register', userController.register.bind(userController));
 router.get("/user/list", authMiddleware, userController.getUsers.bind(userController))
 router.post('/user/login', userController.login.bind(userController));
-router.get('/user/:id', authMiddleware, userController.getUserById.bind(userController));
-router.put('/user/update/:id', authMiddleware, userController.updateUser.bind(userController));
-router.delete('/user/delete/:id', authMiddleware, userController.deleteUser.bind(userController));
+router.get('/user', authMiddleware, userController.getUserById.bind(userController));
+router.put('/user/update', authMiddleware, userController.updateUser.bind(userController));
+router.delete('/user/delete', authMiddleware, userController.deleteUser.bind(userController));
 
 export default router;
